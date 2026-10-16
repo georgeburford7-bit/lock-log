@@ -10,12 +10,13 @@
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="apple-touch-icon" href="icon.png">
 <title>LOCK Log</title>
+<link rel="stylesheet" href="fonts.css">
 <style>
-:root{--bg:#0a111f;--panel:#111a2d;--panel2:#16213a;--line:#223150;--text:#e9eef7;--muted:#8d9db8;--green:#4fb583;--green2:#2e7040;--amber:#e4a94c;--blue:#6aa9ff;--red:#e8686f}
+:root{--sans:Inter,-apple-system,system-ui,sans-serif;--serif:Fraunces,Georgia,serif;--bg:#0a111f;--panel:#111a2d;--panel2:#16213a;--line:#223150;--text:#e9eef7;--muted:#8d9db8;--green:#4fb583;--green2:#2e7040;--amber:#e4a94c;--blue:#6aa9ff;--red:#e8686f}
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
-html,body{margin:0;background:var(--bg);color:var(--text);font:16px/1.4 -apple-system,"SF Pro Text",system-ui,sans-serif}
+html,body{margin:0;background:var(--bg);color:var(--text);font:16px/1.4 var(--sans)}
 body{padding:env(safe-area-inset-top) 14px calc(env(safe-area-inset-bottom) + 30px)}
-h1,h2{font-family:Georgia,serif;font-style:italic;font-weight:400;margin:0}
+h1,h2{font-family:var(--serif);font-style:italic;font-weight:400;margin:0}
 h1{font-size:30px}h2{font-size:20px;margin:18px 0 8px}
 .top{display:flex;justify-content:space-between;align-items:flex-end;padding:14px 0 6px}
 .sub{color:var(--muted);font-size:13px}
@@ -80,6 +81,27 @@ async function readSheet(){
   render();
 }
 const rows=k=>((cache&&cache.sections)||[]).filter(s=>s.key===k).flatMap(s=>s.rows.map(r=>r.values));
+const planRows=()=>((cache&&cache.sections)||[]).filter(s=>s.key==='WEEK PLAN').flatMap(s=>s.rows.map(r=>Object.assign({_title:s.title},r.values)));
+const addDays=(s,n)=>{const d=new Date(s+'T00:00:00Z');d.setUTCDate(d.getUTCDate()+n);return d.toISOString().slice(0,10)};
+const weekStart=s=>addDays(s,-((new Date(s+'T00:00:00Z').getUTCDay()+6)%7));
+function pendingMark(p){for(let i=queue.length-1;i>=0;i--){const q=queue[i];if(q.action==='update'&&q.section===p._title&&q.match.Date===p['Date']&&q.match.Session===p['Session'])return q.set.Status}return null}
+function loggedFor(p){
+  const d=p['Date'],s=(p['Session']||'').toLowerCase(),base=s.split(/[ +]/)[0];
+  const q=k=>rows(k).concat(queue.filter(x=>x.section===k&&!x.action).flatMap(x=>x.rows));
+  if(/^(push|pull|legs?|upper|lower)$/.test(base))return q('GYM LOG').some(g=>g['Date']===d&&(g['Session']||'').toLowerCase().split(/[ +]/)[0]===base);
+  if(/run|jog/.test(s))return q('RUNNING & SPORT LOG').some(r=>r['Date']===d&&/^run/i.test(r['Activity']||''));
+  if(/football|soccer/.test(s))return q('RUNNING & SPORT LOG').some(r=>r['Date']===d&&/football|soccer/i.test(r['Activity']||''));
+  if(/core|mobil/.test(s))return q('CORE & MOBILITY LOG').some(c=>c['Date']===d&&/^completed/i.test(c['Status']||''));
+  return false;
+}
+function pState(p){
+  const m=pendingMark(p),st=m||p['Status']||'';
+  if(/skipped/i.test(st))return'skipped';
+  if(/^completed/i.test(st))return'completed';
+  if(loggedFor(p))return'completed';
+  if(p['Date']<TODAY()||/not reported/i.test(st))return'unreported';
+  return'planned';
+}
 
 /* queue: every write is an idempotent append, so a retry after a timeout is safe */
 function mark(id,status,msg){
@@ -92,6 +114,12 @@ async function flush(){
   while(queue.length){
     const it=queue[0];
     try{
+      if(it.action==='update'){
+        const u=await relay('update',{section:it.section,match:it.match,set:it.set});
+        if(u&&u.ok&&u.verified){queue.shift();mark(it.id,'saved');ls.set('lockp.q',queue);render();continue}
+        if(u&&u.error&&!['version_conflict','server_error','unauthorised'].includes(u.error)){queue.shift();mark(it.id,'failed',u.error);ls.set('lockp.q',queue);render();continue}
+        throw new Error((u&&u.error)||'Not confirmed');
+      }
       const d=await relay('append',{section:it.section,rows:it.rows});
       const res=(d&&d.results)||[];
       if(res.length&&res.every(r=>(r.status==='written'&&r.verified)||r.status==='duplicate')){queue.shift();mark(it.id,'saved');}
@@ -110,6 +138,13 @@ function enqueue(section,row,label,id){
   mark(id,'saving');render();flush();return id;
 }
 
+function enqueueUpdate(section,match,set,label){
+  const id=uid();
+  queue.push({id,action:'update',section,match,set,ts:new Date().toISOString()});ls.set('lockp.q',queue);
+  S.recent.unshift({id,label,status:'saving',msg:''});S.recent=S.recent.slice(0,12);
+  render();flush();
+}
+
 /* history, plan */
 function lastSession(name){
   const g=rows('GYM LOG').filter(r=>isDate(r['Date'])&&(r['Session']||'').toLowerCase()===name.toLowerCase());
@@ -123,10 +158,10 @@ function plannedFor(name){
   const d=p.map(r=>r['Date']).sort()[0];
   return{date:d,rows:p.filter(r=>r['Date']===d).sort((a,b)=>(num(a['Order'])||99)-(num(b['Order'])||99))};
 }
-const card=(o)=>Object.assign({id:uid(),ex:'',load:'',basis:'Total barbell',sets:'',reps:'',rir:'',note:'',status:'todo',msg:''},o||{});
+const card=(o)=>Object.assign({id:uid(),ex:'',load:'',basis:'Total barbell',sets:'',reps:'',rir:'',note:'',hint:'',status:'todo',msg:''},o||{});
 function startSession(name){
   const pl=plannedFor(name),ls_=lastSession(name);
-  if(pl){S.source=`Planned for ${fmtD(pl.date)}`;S.rows=pl.rows.map(r=>card({ex:r['Exercise'],load:r['Target load kg']||'',basis:r['Load basis']||'Total barbell',sets:r['Sets']||'',reps:r['Reps']||'',note:r['Notes']||''}))}
+  if(pl){S.source=`Planned for ${fmtD(pl.date)}`;S.rows=pl.rows.map(r=>card({ex:r['Exercise'],load:r['Target load kg']||'',basis:r['Load basis']||'Total barbell',sets:r['Sets']||'',reps:r['Reps']||'',hint:r['Notes']||''}))}
   else if(ls_){S.source=`Copied from your last ${name} (${fmtD(ls_.date)}). Change it to what you actually do.`;S.rows=ls_.rows.map(r=>card({ex:r['Exercise'],load:r['Load kg']||'',basis:r['Load basis']||'Total barbell',sets:r['Sets']||'',reps:r['Reps']||''}))}
   else{S.source='No previous session found. Add exercises below.';S.rows=[card()]}
   S.session=name;S.screen='session';S.back='';S.backNote='';S.msg=null;render();
@@ -146,11 +181,29 @@ function render(){
   $('#app').innerHTML=`<div class="top"><div><h1>LOCK</h1><div class="sub">${fmtD(TODAY())}</div></div><div>${chip()}</div></div>`+(S.msg?`<div class="msg ${S.msg[0]}">${esc(S.msg[1])}</div>`:'')+f();
 }
 function stTag(r){return {saving:'<span class="tag">Saving</span>',saved:'<span class="tag green">Saved and verified</span>',queued:'<span class="tag amber">Waiting to send</span>',failed:'<span class="tag red">Failed</span>'}[r.status]||''}
+function planItem(p){
+  const s=pState(p),d=p['Date'],sess=p['Session']||'',low=sess.toLowerCase(),base=low.split(/[ +]/)[0];
+  const explicit=/^(completed|skipped)/i.test(pendingMark(p)||p['Status']||'');
+  const tg={completed:['green','Done'],skipped:['red','Skipped'],unreported:['amber','Not logged'],planned:['','Planned']}[s];
+  const canAct=d<=TODAY(),gym=/^(push|pull|legs?)$/.test(base);
+  const b=(a,l,cls)=>`<button class="btn ${cls||''}" style="min-height:44px" data-a="${a}" data-d="${esc(d)}" data-s="${esc(sess)}" data-t="${esc(p._title)}">${l}</button>`;
+  let acts='';
+  if(s!=='completed'&&s!=='skipped'&&canAct){
+    if(gym)acts+=`<button class="btn primary" style="min-height:44px" data-a="start" data-n="${esc(base.charAt(0).toUpperCase()+base.slice(1))}">Start ${esc(base)}</button>`;
+    else if(/run|jog|football|soccer|cricket/.test(low))acts+=`<button class="btn primary" style="min-height:44px" data-a="go" data-n="run">Log it</button>`;
+    else if(/core|mobil/.test(low)&&!/^(recovery|rest)/.test(low))acts+=`<button class="btn primary" style="min-height:44px" data-a="go" data-n="core">Log it</button>`;
+    acts+=b('markdone','Mark done')+b('markskip','Skip','ghost');
+  }else if(explicit&&canAct)acts+=b('markundo','Undo','ghost');
+  return `<div class="card ${s==='completed'?'done':''}"><div class="row" style="justify-content:space-between"><b>${esc(sess)}</b><span class="tag ${tg[0]}">${tg[1]}</span></div><div class="sub">${fmtD(d)} | ${esc(p['Details'])}</div>${acts?`<div class="grid" style="margin-top:10px">${acts}</div>`:''}</div>`;
+}
 function home(){
   if(!cfg.url)return `<div class="card"><b>Connect first</b><div class="sub">Open Settings and enter the relay URL and token once. They stay on this phone.</div></div><button class="btn primary" data-a="setup">Settings</button>`;
-  const plan=rows('WEEK PLAN').filter(r=>r['Date']===TODAY());
+  const all=planRows(),today=all.filter(p=>p['Date']===TODAY());
+  const wk=weekStart(TODAY()),wkEnd=addDays(wk,6);
+  const rest=all.filter(p=>p['Date']>=wk&&p['Date']<=wkEnd&&p['Date']!==TODAY()).sort((x,y)=>x['Date'].localeCompare(y['Date']));
   return `<h2>Today</h2>
-  ${plan.length?plan.map(p=>`<div class="card"><div class="row" style="justify-content:space-between"><b>${esc(p['Session'])}</b><span class="tag">${esc(p['Status'])}</span></div><div class="sub">${esc(p['Details'])}</div></div>`).join(''):'<div class="card sub">Nothing planned for today in the sheet.</div>'}
+  ${today.length?today.map(planItem).join(''):'<div class="card sub">Nothing planned for today in the sheet.</div>'}
+  ${rest.length?`<h2>This week</h2>${rest.map(planItem).join('')}`:''}
   <h2>Start a session</h2>
   <div class="grid"><button class="btn primary" data-a="start" data-n="Push">Push</button><button class="btn primary" data-a="start" data-n="Pull">Pull</button><button class="btn primary" data-a="start" data-n="Legs">Legs</button><button class="btn" data-a="go" data-n="run">Run or sport</button><button class="btn" data-a="go" data-n="core">Core or mobility</button><button class="btn" data-a="go" data-n="weight">Weight and waist</button></div>
   ${S.recent.length?`<h2>Logged on this phone</h2>`+S.recent.map(r=>`<div class="card"><div class="row" style="justify-content:space-between"><span>${esc(r.label)}</span>${stTag(r)}</div>${r.msg?`<div class="sub">${esc(r.msg)}</div>`:''}</div>`).join(''):''}
@@ -168,7 +221,7 @@ function session(){
 }
 function cardEdit(r,i){
   return `<div class="card" data-i="${i}">
-  <label style="margin-top:0">Exercise</label><input data-f="ex" value="${esc(r.ex)}" list="exlist" autocomplete="off">
+  <label style="margin-top:0">Exercise</label><input data-f="ex" value="${esc(r.ex)}" list="exlist" autocomplete="off">${r.hint?`<div class="sub" style="margin-top:6px">Plan: ${esc(r.hint)}</div>`:''}
   <div class="row"><div><label>Load kg</label><div class="step"><button data-a="dec" data-i="${i}">-</button><input data-f="load" inputmode="decimal" value="${esc(r.load)}"><button data-a="inc" data-i="${i}">+</button></div></div></div>
   <div class="row"><div><label>Sets</label><input data-f="sets" inputmode="numeric" value="${esc(r.sets)}"></div><div><label>Reps</label><input data-f="reps" inputmode="numeric" value="${esc(r.reps)}"></div><div><label>Reps left</label><select data-f="rir">${RIRS.map(v=>`<option value="${v}" ${v===r.rir?'selected':''}>${v||'Unknown'}</option>`).join('')}</select></div></div>
   <label>Load basis</label><select data-f="basis">${BASES.map(b=>`<option ${b===r.basis?'selected':''}>${esc(b)}</option>`).join('')}</select>
@@ -200,6 +253,10 @@ document.addEventListener('click',async e=>{
   else if(a==='go'){S.screen=b.dataset.n;S.msg=null;render()}
   else if(a==='refresh'){S.msg=['warn','Refreshing'];render();await readSheet();S.msg=S.err?['bad','Refresh failed: '+S.err]:null;render()}
   else if(a==='flush')flush();
+  else if(a==='markdone'||a==='markskip'||a==='markundo'){
+    const st=a==='markdone'?'Completed':a==='markskip'?'Skipped':'Planned';
+    enqueueUpdate(b.dataset.t,{Date:b.dataset.d,Session:b.dataset.s},{Status:st},`${st==='Planned'?'Undo':st==='Completed'?'Done':'Skipped'}: ${b.dataset.s}`);
+  }
   else if(a==='back'){S.back=S.back===b.dataset.v?'':b.dataset.v;render()}
   else if(a==='addrow'){S.rows.push(card());render()}
   else if(a==='dup'){const r=S.rows[i];S.rows.splice(i+1,0,card({ex:r.ex,load:r.load,basis:r.basis}));render()}
