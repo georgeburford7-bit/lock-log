@@ -217,7 +217,8 @@ function session(){
   ${S.back&&S.back!=='fine'?`<label>Where and how</label><input data-f="backNote" value="${esc(S.backNote)}" placeholder="Location, what movement">`:''}
   ${S.rows.map((r,i)=>r.status==='todo'?cardEdit(r,i):`<div class="card done"><div class="row" style="justify-content:space-between"><b>${esc(r.ex)}</b>${stTag(r)}</div><div class="sub">${r.load?esc(r.load)+' kg, ':''}${esc(r.sets)} x ${esc(r.reps)}${r.rir?', reps left '+esc(r.rir):''}</div>${r.msg?`<div class="sub">${esc(r.msg)}</div>`:''}</div>`).join('')}
   <button class="btn" data-a="addrow" style="margin-top:6px">Add exercise</button>
-  <div class="sub" style="margin-top:10px">${done} of ${S.rows.length} logged. Tap Done on each exercise as you finish it. Corrections are made in the sheet or by asking Claude.</div>`;
+  <button class="btn primary" data-a="finish" style="margin-top:10px;min-height:48px">Finish session</button>
+  <div class="sub" style="margin-top:10px">${done} of ${S.rows.length} logged. Tap Done on each exercise you did, Skip on any you did not, then Finish session. Finish marks the session complete even if some exercises were not done. Corrections are made in the sheet or by asking Claude.</div>`;
 }
 function cardEdit(r,i){
   return `<div class="card" data-i="${i}">
@@ -226,14 +227,15 @@ function cardEdit(r,i){
   <div class="row"><div><label>Sets</label><input data-f="sets" inputmode="numeric" value="${esc(r.sets)}"></div><div><label>Reps</label><input data-f="reps" inputmode="numeric" value="${esc(r.reps)}"></div><div><label>Reps left</label><select data-f="rir">${RIRS.map(v=>`<option value="${v}" ${v===r.rir?'selected':''}>${v||'Unknown'}</option>`).join('')}</select></div></div>
   <label>Load basis</label><select data-f="basis">${BASES.map(b=>`<option ${b===r.basis?'selected':''}>${esc(b)}</option>`).join('')}</select>
   <label>Note (optional)</label><input data-f="note" value="${esc(r.note)}">
-  <div class="grid" style="margin-top:12px"><button class="btn ghost" data-a="dup" data-i="${i}">Split reps (add row)</button><button class="btn primary" data-a="done" data-i="${i}">Done</button></div></div>`;
+  <div class="grid" style="margin-top:12px"><button class="btn ghost" data-a="dup" data-i="${i}">Split reps (add row)</button><button class="btn primary" data-a="done" data-i="${i}">Done</button></div>
+  <button class="btn ghost" data-a="skipex" data-i="${i}" style="margin-top:8px;width:100%">Skip this exercise</button></div>`;
 }
 function exList(){const names=[...new Set(rows('GYM LOG').map(r=>r['Exercise']).filter(Boolean))];return `<datalist id="exlist">${names.map(n=>`<option value="${esc(n)}">`).join('')}</datalist>`}
 function form(title,fields,act){
   return `<button class="back" data-a="home">&lsaquo; Back</button><h2 style="margin-top:0">${title}</h2><form id="f" data-act="${act}">${fields}<button class="btn primary" style="margin-top:16px" type="submit">Save</button></form>`;
 }
 const inp=(n,l,extra)=>`<label>${l}</label><input name="${n}" ${extra||''}>`;
-function run(){return form('Run or sport',`<label>Activity</label><select name="Activity">${['Run','Football','Cricket','Walk','Other'].map(a=>`<option>${a}</option>`).join('')}</select>`+inp('Distance km','Distance km','inputmode="decimal"')+inp('Duration hh:mm:ss','Duration (22:42 or 1:05:30)','inputmode="numeric" placeholder="m:ss"')+inp('Average HR bpm','Average HR','inputmode="numeric"')+inp('Effort /10','Effort out of 10','inputmode="decimal"')+inp('Notes','Notes'),'run')}
+function run(){return form('Run or sport',`<label>Activity</label><select name="Activity">${['Run','Football','Cricket','Walk','Other'].map(a=>`<option>${a}</option>`).join('')}</select>`+inp('Distance km','Distance km','inputmode="decimal"')+inp('Duration hh:mm:ss','Duration (30:38, 3038 or 1:05:30)','type="text" inputmode="text" autocapitalize="off" autocorrect="off" autocomplete="off" placeholder="m:ss"')+inp('Average HR bpm','Average HR','inputmode="numeric"')+inp('Effort /10','Effort out of 10','inputmode="decimal"')+inp('Notes','Notes'),'run')}
 function core(){return form('Core or mobility',inp('Session','Session','placeholder="Home core, Mobility" required')+inp('Exercise / routine','Exercise or routine','required')+inp('Volume','Volume','placeholder="40 s, 2 rounds"')+`<label>Status</label><select name="Status"><option>Completed</option><option>Skipped</option></select>`+inp('Effort / symptoms','Effort or symptoms')+inp('Notes','Notes'),'core')}
 function weight(){return form('Weight and waist',inp('Weight kg','Weight kg','inputmode="decimal"')+inp('Waist cm','Waist cm','inputmode="decimal"')+inp('Measurement conditions','Conditions','placeholder="Morning, before food"')+inp('Notes','Notes'),'weight')}
 function setup(){return `<button class="back" data-a="home">&lsaquo; Back</button><h2 style="margin-top:0">Settings</h2>
@@ -262,6 +264,15 @@ document.addEventListener('click',async e=>{
   else if(a==='dup'){const r=S.rows[i];S.rows.splice(i+1,0,card({ex:r.ex,load:r.load,basis:r.basis}));render()}
   else if(a==='inc'||a==='dec'){const r=S.rows[i],v=num(r.load)||0;r.load=String(Math.max(0,Math.round((v+(a==='inc'?2.5:-2.5))*100)/100));render()}
   else if(a==='done')logRow(i);
+  else if(a==='skipex'){S.rows.splice(i,1);render()}
+  else if(a==='finish'){
+    const base=(S.session||'').toLowerCase(),d=TODAY();
+    const p=planRows().find(r=>r['Date']===d&&(r['Session']||'').toLowerCase().split(/[ +]/)[0]===base&&!/^(completed|skipped)/i.test(pendingMark(r)||r['Status']||''));
+    const left=S.rows.filter(r=>r.status==='todo'&&r.ex.trim()).length;
+    S.rows=S.rows.filter(r=>r.status!=='todo');
+    if(p)enqueueUpdate(p._title,{Date:p['Date'],Session:p['Session']},{Status:'Completed'},`Done: ${p['Session']}`);
+    S.screen='home';S.msg=['ok',`${S.session} finished${left?`, ${left} exercise${left>1?'s':''} not logged`:''}.${p?'':' No open plan row for today, so only logged exercises count.'}`];render();
+  }
   else if(a==='saveCfg'){
     const u=$('#cu').value.trim(),t=$('#ct').value.trim();
     if(!/^https:\/\/script\.google\.com\/macros\/s\/[^/]+\/exec$/.test(u))return setMsg('bad','That is not a web app URL ending in /exec.');
@@ -283,7 +294,7 @@ document.addEventListener('submit',e=>{
   if(act==='run'){
     section='RUNNING & SPORT LOG';
     if(o['Distance km']&&!(num(o['Distance km'])>0&&num(o['Distance km'])<200))return setMsg('bad','Check the distance.');
-    if(o['Duration hh:mm:ss']){const p=o['Duration hh:mm:ss'].split(':').map(Number);if(p.some(isNaN)||p.length<2||p.length>3)return setMsg('bad','Duration must look like 22:42 or 1:05:30.');const s=p.length===3?p[0]*3600+p[1]*60+p[2]:p[0]*60+p[1];if(s<=0||s>86400)return setMsg('bad','Check the duration.');o['Duration hh:mm:ss']=`${Math.floor(s/3600)}:${String(Math.floor(s%3600/60)).padStart(2,'0')}:${String(s%60).padStart(2,'0')}`;
+    if(o['Duration hh:mm:ss']){let raw=o['Duration hh:mm:ss'].replace(/[.;,\s]+/g,':').replace(/^:|:$/g,'');if(/^\d{3,6}$/.test(raw)){const n=raw.padStart(raw.length>4?6:4,'0');raw=raw.length>4?`${n.slice(0,2)}:${n.slice(2,4)}:${n.slice(4)}`:`${n.slice(0,2)}:${n.slice(2)}`}const p=raw.split(':').map(Number);if(p.some(isNaN)||p.length<2||p.length>3)return setMsg('bad','Duration must look like 22:42 or 1:05:30.');const s=p.length===3?p[0]*3600+p[1]*60+p[2]:p[0]*60+p[1];if(s<=0||s>86400)return setMsg('bad','Check the duration.');o['Duration hh:mm:ss']=`${Math.floor(s/3600)}:${String(Math.floor(s%3600/60)).padStart(2,'0')}:${String(s%60).padStart(2,'0')}`;
       if(o['Distance km']){const pace=s/num(o['Distance km']);o['Pace min/km']=`${Math.floor(pace/60)}:${String(Math.round(pace%60)).padStart(2,'0')}`}}
     if(o['Effort /10']&&!(num(o['Effort /10'])>=0&&num(o['Effort /10'])<=10))return setMsg('bad','Effort is 0 to 10.');
     o['Source']='Phone log';label=`${o['Activity']}${o['Distance km']?' '+o['Distance km']+' km':''}`;
