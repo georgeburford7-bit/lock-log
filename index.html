@@ -77,7 +77,7 @@ async function relay(action,payload){
 }
 async function readSheet(){
   if(!cfg.url)return;
-  try{const d=await relay('read');if(d.ok){cache={sections:d.sections,readAt:d.readAt};ls.set('lockp.cache',cache);S.err=null}else S.err=d.error}catch(e){S.err=e.message}
+  try{const d=await relay('read');if(d.ok){let w=(cache&&cache.w)||[];try{const x=await relay('whoopRead');if(x&&x.ok)w=(x.workouts||[]).filter(k=>k.d>=addDays(TODAY(),-21)).map(k=>({d:k.d,a:k.a}))}catch(e){}cache={sections:d.sections,readAt:d.readAt,w};ls.set('lockp.cache',cache);S.err=null}else S.err=d.error}catch(e){S.err=e.message}
   render();
 }
 const rows=k=>((cache&&cache.sections)||[]).filter(s=>s.key===k).flatMap(s=>s.rows.map(r=>r.values));
@@ -88,9 +88,10 @@ function pendingMark(p){for(let i=queue.length-1;i>=0;i--){const q=queue[i];if(q
 function loggedFor(p){
   const d=p['Date'],s=(p['Session']||'').toLowerCase(),base=s.split(/[ +]/)[0];
   const q=k=>rows(k).concat(queue.filter(x=>x.section===k&&!x.action).flatMap(x=>x.rows));
-  if(/^(push|pull|legs?|upper|lower)$/.test(base))return q('GYM LOG').some(g=>g['Date']===d&&(g['Session']||'').toLowerCase().split(/[ +]/)[0]===base);
-  if(/run|jog/.test(s))return q('RUNNING & SPORT LOG').some(r=>r['Date']===d&&/^run/i.test(r['Activity']||''));
-  if(/football|soccer/.test(s))return q('RUNNING & SPORT LOG').some(r=>r['Date']===d&&/football|soccer/i.test(r['Activity']||''));
+  const wo=re=>((cache&&cache.w)||[]).some(w=>w.d===d&&re.test(w.a)); // picked up by WHOOP counts as done
+  if(/^(push|pull|legs?|upper|lower)$/.test(base))return q('GYM LOG').some(g=>g['Date']===d&&(g['Session']||'').toLowerCase().split(/[ +]/)[0]===base)||wo(/^weightlifting$/i);
+  if(/run|jog|time trial/.test(s))return q('RUNNING & SPORT LOG').some(r=>r['Date']===d&&/^run/i.test(r['Activity']||''))||wo(/^running$/i);
+  if(/football|soccer/.test(s))return q('RUNNING & SPORT LOG').some(r=>r['Date']===d&&/football|soccer/i.test(r['Activity']||''))||wo(/^soccer$/i);
   if(/core|mobil/.test(s))return q('CORE & MOBILITY LOG').some(c=>c['Date']===d&&/^completed/i.test(c['Status']||''));
   return false;
 }
