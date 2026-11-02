@@ -81,7 +81,7 @@ async function readSheet(){
   render();
 }
 const rows=k=>((cache&&cache.sections)||[]).filter(s=>s.key===k).flatMap(s=>s.rows.map(r=>r.values));
-const planRows=()=>((cache&&cache.sections)||[]).filter(s=>s.key==='WEEK PLAN').flatMap(s=>s.rows.map(r=>Object.assign({_title:s.title},r.values)));
+const planRows=()=>((cache&&cache.sections)||[]).filter(s=>s.key==='WEEK PLAN').flatMap(s=>s.rows.map(r=>Object.assign({_title:s.title},r.values))).filter(r=>!/core|mobil/i.test(r['Session']||''));
 const addDays=(s,n)=>{const d=new Date(s+'T00:00:00Z');d.setUTCDate(d.getUTCDate()+n);return d.toISOString().slice(0,10)};
 const weekStart=s=>addDays(s,-((new Date(s+'T00:00:00Z').getUTCDay()+6)%7));
 function pendingMark(p){for(let i=queue.length-1;i>=0;i--){const q=queue[i];if(q.action==='update'&&q.section===p._title&&q.match.Date===p['Date']&&q.match.Session===p['Session'])return q.set.Status}return null}
@@ -206,7 +206,7 @@ function home(){
   ${today.length?today.map(planItem).join(''):'<div class="card sub">Nothing planned for today in the sheet.</div>'}
   ${rest.length?`<h2>This week</h2>${rest.map(planItem).join('')}`:''}
   <h2>Start a session</h2>
-  <div class="grid"><button class="btn primary" data-a="start" data-n="Push">Push</button><button class="btn primary" data-a="start" data-n="Pull">Pull</button><button class="btn primary" data-a="start" data-n="Legs">Legs</button><button class="btn primary" data-a="shot">Run from screenshot</button><button class="btn" data-a="go" data-n="run">Run or sport</button><button class="btn" data-a="go" data-n="core">Core or mobility</button><button class="btn" data-a="go" data-n="weight">Weight and waist</button></div>
+  <div class="grid"><button class="btn primary" data-a="start" data-n="Push">Push</button><button class="btn primary" data-a="start" data-n="Pull">Pull</button><button class="btn primary" data-a="start" data-n="Legs">Legs</button><button class="btn primary" data-a="shot">Run from screenshot</button><button class="btn" data-a="go" data-n="run">Run or sport</button><button class="btn" data-a="go" data-n="weight">Weight</button></div>
   ${S.recent.length?`<h2>Logged on this phone</h2>`+S.recent.map(r=>`<div class="card"><div class="row" style="justify-content:space-between"><span>${esc(r.label)}</span>${stTag(r)}</div>${r.msg?`<div class="sub">${esc(r.msg)}</div>`:''}</div>`).join(''):''}
   <div style="display:flex;gap:8px;margin-top:14px"><button class="btn ghost" data-a="refresh">Refresh data</button><button class="btn ghost" data-a="setup">Settings</button></div>
   <div class="sub" style="margin-top:8px">${cache?`Sheet data read ${new Date(cache.readAt).toLocaleString('en-GB',{timeZone:'Europe/London',day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'})}`:'No data loaded yet'}${S.err?`. Last refresh failed: ${esc(S.err)}`:''}</div>`;
@@ -249,7 +249,7 @@ function run(){
   return form('Run or sport',fields,'run').replace('<form id="f"',shot+'<form id="f"');
 }
 function core(){return form('Core or mobility',inp('Session','Session','placeholder="Home core, Mobility" required')+inp('Exercise / routine','Exercise or routine','required')+inp('Volume','Volume','placeholder="40 s, 2 rounds"')+`<label>Status</label><select name="Status"><option>Completed</option><option>Skipped</option></select>`+inp('Effort / symptoms','Effort or symptoms')+inp('Notes','Notes'),'core')}
-function weight(){return form('Weight and waist',inp('Weight kg','Weight kg','inputmode="decimal"')+inp('Waist cm','Waist cm','inputmode="decimal"')+inp('Measurement conditions','Conditions','placeholder="Morning, before food"')+inp('Notes','Notes'),'weight')}
+function weight(){return form('Weight',inp('Weight kg','Weight kg','inputmode="decimal"')+inp('Measurement conditions','Conditions','placeholder="Morning, before food"')+inp('Notes','Notes'),'weight')}
 function setup(){return `<button class="back" data-a="home">&lsaquo; Back</button><h2 style="margin-top:0">Settings</h2>
   <label>Relay URL</label><input id="cu" value="${esc(cfg.url)}" placeholder="https://script.google.com/macros/s/.../exec" autocapitalize="off" autocorrect="off">
   <label>Relay token</label><input id="ct" type="password" value="${esc(cfg.token)}" autocapitalize="off" autocorrect="off">
@@ -367,7 +367,7 @@ document.addEventListener('submit',e=>{
     if(/^run/i.test(o['Activity']||'')&&o['Distance km']&&S.dupKey!==dupKey&&rows('RUNNING & SPORT LOG').some(r=>r['Date']===o['Date']&&/^run/i.test(r['Activity']||'')&&Math.abs((num(r['Distance km'])||0)-num(o['Distance km']))<0.05)){S.dupKey=dupKey;return setMsg('warn','A run with this date and distance is already in the sheet. Press Save again to add it anyway.')}
     o['Source']=S.runShot?'Runna screenshot':'Phone log';S.runPre={};S.runShot=false;S.dupKey='';label=`${o['Activity']}${o['Distance km']?' '+o['Distance km']+' km':''}`;
   }else if(act==='core'){section='CORE & MOBILITY LOG';label=`${o['Session']}: ${o['Exercise / routine']}`}
-  else{section='BODY MEASUREMENTS';const w=num(o['Weight kg']),c=num(o['Waist cm']);if(w==null&&c==null)return setMsg('bad','Enter a weight or a waist.');if(o['Weight kg']&&!(w>30&&w<250))return setMsg('bad','Check the weight.');if(o['Waist cm']&&!(c>40&&c<200))return setMsg('bad','Check the waist.');label=`Weight ${o['Weight kg']||''} ${o['Waist cm']?'waist '+o['Waist cm']:''}`}
+  else{section='BODY MEASUREMENTS';const w=num(o['Weight kg']);if(w==null)return setMsg('bad','Enter a weight.');if(o['Weight kg']&&!(w>30&&w<250))return setMsg('bad','Check the weight.');label=`Weight ${o['Weight kg']||''}`}
   S.screen='home';S.msg=null;enqueue(section,o,label);
 });
 function logRow(i){
