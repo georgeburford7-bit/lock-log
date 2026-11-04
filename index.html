@@ -316,7 +316,7 @@ document.addEventListener('click',async e=>{
   if(a==='home'){S.screen='home';S.msg=null;render()}
   else if(a==='setup'){S.screen='setup';render()}
   else if(a==='shot'){S.screen='run';S.msg=null;render();const f=$('#shot');if(f)f.click()}
-  else if(a==='start')startSession(b.dataset.n);
+  else if(a==='start'){S.msg=['warn','Checking for this week\'s plan'];render();await Promise.race([readSheet(),new Promise(r=>setTimeout(r,8000))]);S.msg=null;startSession(b.dataset.n)}
   else if(a==='go'){S.screen=b.dataset.n;S.msg=null;render()}
   else if(a==='refresh'){S.msg=['warn','Refreshing'];render();await readSheet();S.msg=S.err?['bad','Refresh failed: '+S.err]:null;render()}
   else if(a==='flush')flush();
