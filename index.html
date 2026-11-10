@@ -139,8 +139,8 @@ function enqueue(section,row,label,id){
   mark(id,'saving');render();flush();return id;
 }
 
-function enqueueUpdate(section,match,set,label){
-  const id=uid();
+function enqueueUpdate(section,match,set,label,id){
+  id=id||uid();
   queue.push({id,action:'update',section,match,set,ts:new Date().toISOString()});ls.set('lockp.q',queue);
   S.recent.unshift({id,label,status:'saving',msg:''});S.recent=S.recent.slice(0,12);
   render();flush();
@@ -165,7 +165,25 @@ function startSession(name){
   if(pl){S.source=`Planned for ${fmtD(pl.date)}`;S.rows=pl.rows.map(r=>card({ex:r['Exercise'],load:r['Target load kg']||'',basis:r['Load basis']||'Total barbell',sets:r['Sets']||'',reps:r['Reps']||'',hint:r['Notes']||''}))}
   else if(ls_){S.source=`Copied from your last ${name} (${fmtD(ls_.date)}). Change it to what you actually do.`;S.rows=ls_.rows.map(r=>card({ex:r['Exercise'],load:r['Load kg']||'',basis:r['Load basis']||'Total barbell',sets:r['Sets']||'',reps:r['Reps']||''}))}
   else{S.source='No previous session found. Add exercises below.';S.rows=[card()]}
-  S.session=name;S.screen='session';S.back='';S.backNote='';S.msg=null;render();
+  S.session=name;S.date=TODAY();S.screen='session';S.back='';S.backNote='';S.msg=null;render();
+}
+/* in-progress session survives the app being closed or reloaded */
+function saveSess(){
+  if(S.screen==='session'&&S.session)ls.set('lockp.sess',{session:S.session,date:S.date||TODAY(),source:S.source,back:S.back,backNote:S.backNote,rows:S.rows});
+}
+function clearSess(){try{localStorage.removeItem('lockp.sess')}catch(e){}}
+function origOf(g){return{'Date':String(g['Date']||''),'Session':String(g['Session']||''),'Exercise':String(g['Exercise']||''),'Load kg':String(g['Load kg']==null?'':g['Load kg']),'Load basis':String(g['Load basis']||''),'Sets':String(g['Sets']||''),'Reps':String(g['Reps']||''),'Reps in reserve':String(g['Reps in reserve']||''),'Notes':String(g['Notes']||'')}}
+function rowFromOrig(o){return card({ex:o['Exercise'],load:o['Load kg'],basis:o['Load basis']||'Total barbell',sets:o['Sets'],reps:o['Reps'],rir:o['Reps in reserve'],note:o['Notes'],status:'saved',orig:o})}
+function openLogged(d,name){
+  const g=rows('GYM LOG').filter(r=>String(r['Date'])===d&&(r['Session']||'').toLowerCase()===name.toLowerCase());
+  if(!g.length)return startSession(name);
+  S.session=g[0]['Session'];S.date=d;S.source=`Logged on ${fmtD(d)}. Tap Edit on any exercise to change it, or Add exercise for anything missed.`;
+  S.rows=g.map(r=>rowFromOrig(origOf(r)));S.screen='session';S.back='';S.backNote='';S.msg=null;render();
+}
+function loggedSessions(){
+  const from=addDays(TODAY(),-14),seen={};
+  rows('GYM LOG').forEach(r=>{const d=String(r['Date']||'');if(isDate(d)&&d>=from){const k=d+'|'+(r['Session']||'');seen[k]=seen[k]||{d,n:r['Session']||'',c:0};seen[k].c++}});
+  return Object.values(seen).sort((a,b)=>b.d.localeCompare(a.d));
 }
 
 /* render */
@@ -179,6 +197,7 @@ function chip(){
 }
 function render(){
   const f={home,session,run,core,weight,setup}[S.screen];
+  saveSess();
   $('#app').innerHTML=`<div class="top"><div><h1>LOCK</h1><div class="sub">${fmtD(TODAY())}</div></div><div>${chip()}</div></div>`+(S.msg?`<div class="msg ${S.msg[0]}">${esc(S.msg[1])}</div>`:'')+f();
 }
 function stTag(r){return {saving:'<span class="tag">Saving</span>',saved:'<span class="tag green">Saved and verified</span>',queued:'<span class="tag amber">Waiting to send</span>',failed:'<span class="tag red">Failed</span>'}[r.status]||''}
@@ -190,11 +209,13 @@ function planItem(p){
   const b=(a,l,cls)=>`<button class="btn ${cls||''}" style="min-height:44px" data-a="${a}" data-d="${esc(d)}" data-s="${esc(sess)}" data-t="${esc(p._title)}">${l}</button>`;
   let acts='';
   if(s!=='completed'&&s!=='skipped'&&canAct){
-    if(gym)acts+=`<button class="btn primary" style="min-height:44px" data-a="start" data-n="${esc(base.charAt(0).toUpperCase()+base.slice(1))}">Start ${esc(base)}</button>`;
-    else if(/run|jog|football|soccer|cricket/.test(low))acts+=`<button class="btn primary" style="min-height:44px" data-a="go" data-n="run">Log it</button>`;
+    if(gym)acts+=`<button class="btn primary" style="min-height:44px" data-a="start" data-n="${esc(base.charAt(0).toUpperCase()+base.slice(1))}">Start ${esc(base)}</button>`;    else if(/run|jog|football|soccer|cricket/.test(low))acts+=`<button class="btn primary" style="min-height:44px" data-a="go" data-n="run">Log it</button>`;
     else if(/core|mobil/.test(low)&&!/^(recovery|rest)/.test(low))acts+=`<button class="btn primary" style="min-height:44px" data-a="go" data-n="core">Log it</button>`;
     acts+=b('markdone','Mark done')+b('markskip','Skip','ghost');
-  }else if(explicit&&canAct)acts+=b('markundo','Undo','ghost');
+  }else{
+    if(gym&&canAct)acts+=`<button class="btn" style="min-height:44px" data-a="editsess" data-d="${esc(d)}" data-n="${esc(base.charAt(0).toUpperCase()+base.slice(1))}">Open and edit</button>`;
+    if(explicit&&canAct)acts+=b('markundo','Undo','ghost');
+  }
   return `<div class="card ${s==='completed'?'done':''}"><div class="row" style="justify-content:space-between"><b>${esc(sess)}</b><span class="tag ${tg[0]}">${tg[1]}</span></div><div class="sub">${fmtD(d)} | ${esc(p['Details'])}</div>${acts?`<div class="grid" style="margin-top:10px">${acts}</div>`:''}</div>`;
 }
 function home(){
@@ -202,11 +223,13 @@ function home(){
   const all=planRows(),today=all.filter(p=>p['Date']===TODAY());
   const wk=weekStart(TODAY()),wkEnd=addDays(wk,6);
   const rest=all.filter(p=>p['Date']>=wk&&p['Date']<=wkEnd&&p['Date']!==TODAY()).sort((x,y)=>x['Date'].localeCompare(y['Date']));
-  return `<h2>Today</h2>
+  const sv=ls.get('lockp.sess'),ls2=loggedSessions();
+  return `${sv&&sv.rows&&sv.rows.length?`<div class="card"><b>Session in progress: ${esc(sv.session)}</b><div class="sub">${esc(fmtD(sv.date))}, ${sv.rows.filter(r=>r.status!=='todo').length} of ${sv.rows.length} exercises logged</div><div class="grid" style="margin-top:10px"><button class="btn primary" style="min-height:44px" data-a="resume">Resume</button><button class="btn ghost" style="min-height:44px" data-a="discard">Discard</button></div></div>`:''}<h2>Today</h2>
   ${today.length?today.map(planItem).join(''):'<div class="card sub">Nothing planned for today in the sheet.</div>'}
   ${rest.length?`<h2>This week</h2>${rest.map(planItem).join('')}`:''}
   <h2>Start a session</h2>
   <div class="grid"><button class="btn primary" data-a="start" data-n="Push">Push</button><button class="btn primary" data-a="start" data-n="Pull">Pull</button><button class="btn primary" data-a="start" data-n="Legs">Legs</button><button class="btn primary" data-a="shot">Run from screenshot</button><button class="btn" data-a="go" data-n="run">Run or sport</button><button class="btn" data-a="go" data-n="weight">Weight</button></div>
+  ${ls2.length?`<h2>Edit a logged session</h2>`+ls2.map(x=>`<div class="card"><div class="row" style="justify-content:space-between"><span><b>${esc(x.n)}</b> <span class="sub">${esc(fmtD(x.d))}, ${x.c} rows</span></span><button class="btn ghost" style="min-height:40px;width:auto;padding:0 16px" data-a="editsess" data-d="${esc(x.d)}" data-n="${esc(x.n)}">Edit</button></div></div>`).join(''):''}
   ${S.recent.length?`<h2>Logged on this phone</h2>`+S.recent.map(r=>`<div class="card"><div class="row" style="justify-content:space-between"><span>${esc(r.label)}</span>${stTag(r)}</div>${r.msg?`<div class="sub">${esc(r.msg)}</div>`:''}</div>`).join(''):''}
   <div style="display:flex;gap:8px;margin-top:14px"><button class="btn ghost" data-a="refresh">Refresh data</button><button class="btn ghost" data-a="setup">Settings</button></div>
   <div class="sub" style="margin-top:8px">${cache?`Sheet data read ${new Date(cache.readAt).toLocaleString('en-GB',{timeZone:'Europe/London',day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'})}`:'No data loaded yet'}${S.err?`. Last refresh failed: ${esc(S.err)}`:''}</div>`;
@@ -216,10 +239,10 @@ function session(){
   return `<button class="back" data-a="home">&lsaquo; Back</button><h2 style="margin-top:0">${esc(S.session)}</h2><div class="sub">${esc(S.source)}</div>
   <label>Back during this session</label><div class="seg" id="seg">${[['fine','Back all good'],['tight','Tight'],['pain','Pain']].map(([k,l])=>`<button data-a="back" data-v="${k}" aria-pressed="${S.back===k}">${l}</button>`).join('')}</div>
   ${S.back&&S.back!=='fine'?`<label>Where and how</label><input data-f="backNote" value="${esc(S.backNote)}" placeholder="Location, what movement">`:''}
-  ${S.rows.map((r,i)=>r.status==='todo'?cardEdit(r,i):`<div class="card done"><div class="row" style="justify-content:space-between"><b>${esc(r.ex)}</b>${stTag(r)}</div><div class="sub">${r.load?esc(r.load)+' kg, ':''}${esc(r.sets)} x ${esc(r.reps)}${r.rir?', reps left '+esc(r.rir):''}</div>${r.msg?`<div class="sub">${esc(r.msg)}</div>`:''}</div>`).join('')}
+  ${S.rows.map((r,i)=>r.status==='todo'?cardEdit(r,i):`<div class="card done"><div class="row" style="justify-content:space-between"><b>${esc(r.ex)}</b>${stTag(r)}</div><div class="sub">${r.load?esc(r.load)+' kg, ':''}${esc(r.sets)} x ${esc(r.reps)}${r.rir?', reps left '+esc(r.rir):''}</div>${r.msg?`<div class="sub">${esc(r.msg)}</div>`:''}<button class="btn ghost" style="margin-top:8px;min-height:40px" data-a="editrow" data-i="${i}">Edit</button></div>`).join('')}
   <button class="btn" data-a="addrow" style="margin-top:6px">Add exercise</button>
   <button class="btn primary" data-a="finish" style="margin-top:10px;min-height:48px">Finish session</button>
-  <div class="sub" style="margin-top:10px">${done} of ${S.rows.length} logged. Tap Done on each exercise you did, Skip on any you did not, then Finish session. Finish marks the session complete even if some exercises were not done. Corrections are made in the sheet or by asking Claude.</div>`;
+  <div class="sub" style="margin-top:10px">${done} of ${S.rows.length} logged. Tap Done on each exercise you did, Skip on any you did not, then Finish session. Finish marks the session complete even if some exercises were not done. Tap Edit on a saved exercise to change it. Leaving this screen keeps the session; resume it from Home.</div>`;
 }
 function cardEdit(r,i){
   return `<div class="card" data-i="${i}">
@@ -229,7 +252,7 @@ function cardEdit(r,i){
   <label>Load basis</label><select data-f="basis">${BASES.map(b=>`<option ${b===r.basis?'selected':''}>${esc(b)}</option>`).join('')}</select>
   <label>Note (optional)</label><input data-f="note" value="${esc(r.note)}">
   <div class="grid" style="margin-top:12px"><button class="btn ghost" data-a="dup" data-i="${i}">Split reps (add row)</button><button class="btn primary" data-a="done" data-i="${i}">Done</button></div>
-  <button class="btn ghost" data-a="skipex" data-i="${i}" style="margin-top:8px;width:100%">Skip this exercise</button></div>`;
+  <button class="btn ghost" data-a="skipex" data-i="${i}" style="margin-top:8px;width:100%">${r.orig?'Cancel changes':'Skip this exercise'}</button></div>`;
 }
 function exList(){const names=[...new Set(rows('GYM LOG').map(r=>r['Exercise']).filter(Boolean))];return `<datalist id="exlist">${names.map(n=>`<option value="${esc(n)}">`).join('')}</datalist>`}
 function form(title,fields,act){
@@ -329,12 +352,16 @@ document.addEventListener('click',async e=>{
   else if(a==='dup'){const r=S.rows[i];S.rows.splice(i+1,0,card({ex:r.ex,load:r.load,basis:r.basis}));render()}
   else if(a==='inc'||a==='dec'){const r=S.rows[i],v=num(r.load)||0;r.load=String(Math.max(0,Math.round((v+(a==='inc'?2.5:-2.5))*100)/100));render()}
   else if(a==='done')logRow(i);
-  else if(a==='skipex'){S.rows.splice(i,1);render()}
+  else if(a==='skipex'){const r=S.rows[i];if(r.orig){Object.assign(r,{ex:r.orig['Exercise'],load:r.orig['Load kg'],basis:r.orig['Load basis']||'Total barbell',sets:r.orig['Sets'],reps:r.orig['Reps'],rir:r.orig['Reps in reserve'],note:r.orig['Notes'],status:'saved'})}else S.rows.splice(i,1);render()}
+  else if(a==='editrow'){S.rows[i].status='todo';S.rows[i].msg='';render()}
+  else if(a==='resume'){const sv=ls.get('lockp.sess');if(sv){S.session=sv.session;S.date=sv.date;S.source=sv.source;S.back=sv.back||'';S.backNote=sv.backNote||'';S.rows=sv.rows;S.screen='session';S.msg=null;render()}}
+  else if(a==='discard'){if(confirm('Discard the unfinished session on this phone? Exercises already saved stay in the sheet.')){clearSess();render()}}
+  else if(a==='editsess'){S.msg=['warn','Loading the logged session'];render();await Promise.race([flush(),new Promise(r=>setTimeout(r,6000))]);await Promise.race([readSheet(),new Promise(r=>setTimeout(r,8000))]);S.msg=null;openLogged(b.dataset.d,b.dataset.n)}
   else if(a==='finish'){
-    const base=(S.session||'').toLowerCase(),d=TODAY();
+    const base=(S.session||'').toLowerCase(),d=S.date||TODAY();
     const p=planRows().find(r=>r['Date']===d&&(r['Session']||'').toLowerCase().split(/[ +]/)[0]===base&&!/^(completed|skipped)/i.test(pendingMark(r)||r['Status']||''));
     const left=S.rows.filter(r=>r.status==='todo'&&r.ex.trim()).length;
-    S.rows=S.rows.filter(r=>r.status!=='todo');
+    S.rows=S.rows.filter(r=>r.status!=='todo');clearSess();
     if(p)enqueueUpdate(p._title,{Date:p['Date'],Session:p['Session']},{Status:'Completed'},`Done: ${p['Session']}`);
     S.screen='home';S.msg=['ok',`${S.session} finished${left?`, ${left} exercise${left>1?'s':''} not logged`:''}.${p?'':' No open plan row for today, so only logged exercises count.'}`];render();
   }
@@ -350,7 +377,7 @@ function setMsg(k,m){S.msg=[k,m];render()}
 document.addEventListener('input',e=>{
   const f=e.target.dataset.f;if(!f)return;
   if(f==='backNote'){S.backNote=e.target.value;return}
-  const c=e.target.closest('[data-i]');if(c)S.rows[+c.dataset.i][f]=e.target.value;
+  const c=e.target.closest('[data-i]');if(c){S.rows[+c.dataset.i][f]=e.target.value;saveSess()}
 });
 document.addEventListener('submit',e=>{
   e.preventDefault();const fm=e.target;if(fm.id!=='f')return;
@@ -378,17 +405,30 @@ function logRow(i){
   if(sets==null||sets<1||sets>20)return setMsg('bad','Check the sets.');
   if(reps==null||reps<1||reps>100)return setMsg('bad','Check the reps.');
   const back=S.back==='fine'?'Back all good':S.back==='tight'?'Back tight'+(S.backNote?': '+S.backNote:''):S.back==='pain'?'Back pain'+(S.backNote?': '+S.backNote:''):'';
-  const o={'Date':TODAY(),'Session':S.session,'Exercise':r.ex.trim(),'Load basis':r.basis,'Sets':String(sets),'Reps':String(reps)};
+  if(r.orig){
+    const set={'Exercise':r.ex.trim(),'Load kg':r.load===''?'':String(L),'Load basis':r.basis,'Sets':String(sets),'Reps':String(reps),'Reps in reserve':r.rir||'','Notes':r.note||''};
+    const m={'Date':r.orig['Date'],'Session':r.orig['Session'],'Exercise':r.orig['Exercise'],'Sets':r.orig['Sets'],'Reps':r.orig['Reps'],'Load kg':r.orig['Load kg']};
+    r.orig=Object.assign({},r.orig,set);r.status='saving';r.msg='';S.msg=null;
+    enqueueUpdate('GYM LOG',m,set,`Edited ${S.session}: ${r.ex.trim()}`,r.id);return;
+  }
+  const o={'Date':S.date||TODAY(),'Session':S.session,'Exercise':r.ex.trim(),'Load basis':r.basis,'Sets':String(sets),'Reps':String(reps)};
   if(r.load!=='')o['Load kg']=String(L);
   if(r.rir)o['Reps in reserve']=r.rir;
   if(back)o['Back / symptoms']=back;
   if(r.note)o['Notes']=r.note;
+  r.orig=origOf(o);
   S.msg=null;enqueue('GYM LOG',o,`${S.session}: ${r.ex.trim()}`,r.id);
 }
 window.addEventListener('online',()=>{S.online=true;flush()});
 document.addEventListener('visibilitychange',()=>{if(!document.hidden){flush();readSheet()}});
 if('serviceWorker' in navigator&&(location.protocol==='https:'||location.hostname==='localhost'))navigator.serviceWorker.register('sw.js').catch(()=>{});
 document.body.insertAdjacentHTML('beforeend','<div id="dl"></div>');
+{const sv=ls.get('lockp.sess');
+ if(sv&&sv.rows&&sv.rows.length&&sv.date>=addDays(TODAY(),-2)){
+  const inQ=id=>queue.some(q=>q.id===id);
+  sv.rows.forEach(r=>{if((r.status==='saving'||r.status==='queued'||r.status==='failed')&&!inQ(r.id)&&r.status!=='failed')r.status='saved'});
+  Object.assign(S,{session:sv.session,date:sv.date,source:sv.source,back:sv.back||'',backNote:sv.backNote||'',rows:sv.rows,screen:'session'});
+ }else if(sv)clearSess();}
 render();
 // datalist for exercise suggestions is rebuilt after data loads
 const _r=render;render=function(){_r();const a=$('#app');if(a&&!$('#exlist'))a.insertAdjacentHTML('beforeend',exList())};
